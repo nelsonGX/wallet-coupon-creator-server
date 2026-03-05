@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlmodel import Session, select
 
-from database import Device, Registration, get_session
+from database import Device, Pass, Registration, ShareToken, get_session
 from pass_builder import build_pkpass
 from schemas import PassRequest
 from services.pass_service import pass_data_from_db, pkpass_response, upsert_pass
@@ -33,6 +33,7 @@ async def sign_pass(
 ):
     req = _parse_pass_request(data)
     print("Signing pass:", req.couponID)
+    print("icon:", icon.filename if icon else "None", "content_type:", icon.content_type if icon else "N/A")
     pass_ = upsert_pass(req, session)
     if icon is not None:
         if not icon.content_type or not icon.content_type.startswith("image/"):
@@ -92,4 +93,44 @@ async def update_pass(
         if invalid_tokens:
             session.commit()
 
+    return pkpass_response(pkpass_bytes)
+
+
+@router.post("/create-share-link/{serial_number}")
+async def create_share_link(
+    serial_number: str,
+    session: Session = Depends(get_session),
+):
+    pass_ = session.get(Pass, serial_number)
+    if not pass_:
+        raise HTTPException(status_code=404, detail="Pass not found")
+
+    token = ShareToken(serial_number=serial_number)
+    session.add(token)
+    session.commit()
+    session.refresh(token)
+
+    return {"token": token.token}
+
+
+@router.get("/share/{token}")
+async def redeem_share_link(
+    token: str,
+    session: Session = Depends(get_session),
+):
+    share_token = session.get(ShareToken, token)
+    if not share_token:
+        raise HTTPException(status_code=404, detail="Invalid share link")
+    if share_token.used:
+        raise HTTPException(status_code=410, detail="This share link has already been used")
+
+    pass_ = session.get(Pass, share_token.serial_number)
+    if not pass_:
+        raise HTTPException(status_code=404, detail="Pass not found")
+
+    share_token.used = True
+    session.add(share_token)
+    session.commit()
+
+    pkpass_bytes = build_pkpass(pass_data_from_db(pass_), pass_.authentication_token)
     return pkpass_response(pkpass_bytes)

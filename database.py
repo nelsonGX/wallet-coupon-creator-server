@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Generator
 
@@ -74,6 +75,15 @@ class Registration(SQLModel, table=True):
 
     device: Optional[Device] = Relationship(back_populates="registrations")
     pass_: Optional[Pass] = Relationship(back_populates="registrations")
+
+
+class ShareToken(SQLModel, table=True):
+    __tablename__ = "share_tokens"
+
+    token: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    serial_number: str = Field(foreign_key="passes.serial_number")
+    used: bool = False
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 # ---------------------------------------------------------------------------
