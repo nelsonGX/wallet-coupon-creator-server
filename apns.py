@@ -31,6 +31,11 @@ def _load_p12_pem() -> tuple[bytes, bytes]:
     p12_password = p12_password_str.encode() if p12_password_str else None
     private_key, certificate, _ = pkcs12.load_key_and_certificates(p12_data, p12_password)
 
+    if certificate is None:
+        raise ValueError("No certificate found in the .p12 file.")
+    if private_key is None:
+        raise ValueError("No private key found in the .p12 file.")
+
     cert_pem = certificate.public_bytes(Encoding.PEM)
     key_pem = private_key.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption())
     return cert_pem, key_pem
