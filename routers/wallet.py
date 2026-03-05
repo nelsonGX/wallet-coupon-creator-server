@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlmodel import Session, select
 
-from database import Device, Pass, Registration, get_session
+from database import Device, Pass, Registration, ShareToken, get_session
 from pass_builder import build_pkpass
 from services.pass_service import pass_data_from_db, pkpass_response, validate_auth_token
 
@@ -56,6 +56,17 @@ async def register_device(
         raise HTTPException(status_code=500, detail="Device ID is missing")
 
     session.add(Registration(device_id=device.id, serial_number=serial_number))
+
+    active_share_tokens = session.exec(
+        select(ShareToken).where(
+            ShareToken.serial_number == serial_number,
+            ShareToken.used == False,  # noqa: E712
+        )
+    ).all()
+    for share_token in active_share_tokens:
+        share_token.used = True
+        session.add(share_token)
+
     session.commit()
     return Response(status_code=201)
 

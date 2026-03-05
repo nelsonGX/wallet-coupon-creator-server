@@ -128,9 +128,5 @@ async def redeem_share_link(
     if not pass_:
         raise HTTPException(status_code=404, detail="Pass not found")
 
-    share_token.used = True
-    session.add(share_token)
-    session.commit()
-
     pkpass_bytes = build_pkpass(pass_data_from_db(pass_), pass_.authentication_token)
     return pkpass_response(pkpass_bytes)
