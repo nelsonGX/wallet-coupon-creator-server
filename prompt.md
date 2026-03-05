@@ -1,24 +1,38 @@
-# Build an Apple Wallet `.pkpass` Signing Server
+# Build an Apple Wallet `.pkpass` Signing & Update Server
 
 ## Overview
 
-Build a lightweight HTTP server that accepts coupon data as JSON, constructs a valid Apple Wallet `.pkpass` bundle (coupon style), signs it with a Pass Type ID certificate, and returns the signed `.pkpass` file.
+Build an HTTP server that:
+1. Accepts coupon data as JSON, constructs a valid Apple Wallet `.pkpass` bundle (coupon style), signs it, and returns the `.pkpass` file
+2. Implements Apple's Web Service protocol so passes auto-update on all devices when coupon data changes (usage count, recharge, edits)
+3. Sends push notifications via APNs to trigger Wallet to pull updated passes
 
 ## Configuration
 
 - **Pass Type Identifier:** `pass.com.nelsongx.apps.coupon-creator`
 - **Team Identifier:** `G4LXL97NF9`
 - **Organization Name:** Provided in request, or default to `"Coupon Creator"`
-- The server should accept the `.p12` certificate file path and password via environment variables: `PASS_CERTIFICATE_PATH` and `PASS_CERTIFICATE_PASSWORD`
-- Also needs the Apple WWDR (Worldwide Developer Relations) intermediate certificate. Download it from https://www.apple.com/certificateauthority/ (the "Worldwide Developer Relations - G4" certificate). Path via env var `WWDR_CERTIFICATE_PATH`.
+
+Environment variables:
+
+| Variable | Description |
+|---|---|
+| `PASS_CERTIFICATE_PATH` | Path to `.p12` certificate file |
+| `PASS_CERTIFICATE_PASSWORD` | Password for the `.p12` file |
+| `WWDR_CERTIFICATE_PATH` | Path to Apple WWDR G4 intermediate cert |
+| `PORT` | Server port (default 8000) |
+| `DATABASE_URL` | Database connection string (SQLite for local, PostgreSQL for production) |
 
 ## Tech Stack
 
 - Python FastAPI
-- Use OpenSSL for signing
-- No database needed — stateless signing service
+- **Database:** SQLite for development, PostgreSQL for production (needs persistent storage for device registrations)
+- OpenSSL for signing
+- HTTP/2 client for APNs push notifications
 
-## API Endpoint
+---
+
+## Part 1: Pass Creation API (called by the iOS app)
 
 ### `POST /sign-pass`
 
@@ -41,7 +55,185 @@ Request body (JSON):
 }
 ```
 
-Response: The signed `.pkpass` file as binary data with `Content-Type: application/vnd.apple.pkpass`.
+**Server behavior:**
+1. Save/update the coupon data in the `passes` database table (upsert by `couponID`)
+2. Set `lastUpdated` to current timestamp
+3. Build and sign the `.pkpass` bundle (see "How to Build the `.pkpass` Bundle" below)
+4. Return the `.pkpass` as binary with `Content-Type: application/vnd.apple.pkpass`
+
+### `POST /update-pass`
+
+Same request body as `/sign-pass`. Used when the iOS app updates a coupon (redeem, recharge, edit).
+
+**Server behavior:**
+1. Update the coupon data in the `passes` table
+2. Set `lastUpdated` to current timestamp
+3. Build and sign a new `.pkpass` bundle
+4. **Send push notifications** to all devices registered for this pass (see Part 3)
+5. Return the new `.pkpass` as binary
+
+---
+
+## Part 2: Apple Wallet Web Service Endpoints
+
+These endpoints are called **by Apple Wallet on the user's device**, not by the iOS app. They follow Apple's required Web Service protocol exactly.
+
+The base URL for these is your server's public URL (e.g. `https://your-server.com/api`). This URL goes into `pass.json` as `webServiceURL`.
+
+### 2.1 Register a Device for Pass Updates
+
+```
+POST /api/v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}
+```
+
+**Headers:**
+- `Authorization: ApplePass <authenticationToken>`
+
+**Request body:**
+```json
+{
+  "pushToken": "<APNs push token>"
+}
+```
+
+**Server behavior:**
+1. Validate the `authenticationToken` matches the pass's stored token
+2. Create/update the device in the `devices` table (store `deviceLibraryIdentifier` and `pushToken`)
+3. Create an entry in the `registrations` table linking the device to the pass
+4. Return `201 Created` if new registration, `200 OK` if already registered
+
+### 2.2 Get Serial Numbers for Updated Passes
+
+```
+GET /api/v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}?passesUpdatedSince={previousLastUpdated}
+```
+
+**Server behavior:**
+1. Look up all passes registered to this device
+2. If `passesUpdatedSince` is provided, filter to passes updated after that timestamp
+3. Return `200` with body:
+
+```json
+{
+  "serialNumbers": ["550e8400-e29b-41d4-a716-446655440000", "..."],
+  "lastUpdated": "1709654400"
+}
+```
+
+4. Return `204 No Content` if no passes have been updated
+
+### 2.3 Get the Latest Version of a Pass
+
+```
+GET /api/v1/passes/{passTypeIdentifier}/{serialNumber}
+```
+
+**Headers:**
+- `Authorization: ApplePass <authenticationToken>`
+
+**Server behavior:**
+1. Validate the `authenticationToken`
+2. Look up the pass data from the `passes` table by `serialNumber`
+3. Build and sign a fresh `.pkpass` bundle from the stored data
+4. Return the `.pkpass` with `Content-Type: application/vnd.apple.pkpass`
+5. Return `304 Not Modified` if the pass hasn't changed (compare `If-Modified-Since` header with `lastUpdated`)
+
+### 2.4 Unregister a Device
+
+```
+DELETE /api/v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}
+```
+
+**Headers:**
+- `Authorization: ApplePass <authenticationToken>`
+
+**Server behavior:**
+1. Validate the `authenticationToken`
+2. Delete the registration linking this device to this pass
+3. If the device has no more registrations, delete the device entry
+4. Return `200 OK`
+
+### 2.5 Log Errors (optional but recommended)
+
+```
+POST /api/v1/log
+```
+
+**Request body:**
+```json
+{
+  "logs": ["error message 1", "error message 2"]
+}
+```
+
+**Server behavior:**
+1. Log the messages to your server logs for debugging
+2. Return `200 OK`
+
+---
+
+## Part 3: Push Notifications via APNs
+
+When a pass is updated (via `/update-pass`), send push notifications to all registered devices to tell Wallet to fetch the new pass.
+
+**How it works:**
+1. Look up all devices registered for the updated pass in the `registrations` table
+2. For each device, send a push notification to APNs using:
+   - **Certificate:** The same Pass Type ID certificate (`.p12`) used for signing
+   - **Push token:** From the `devices` table
+   - **Payload:** An empty JSON object `{}`
+   - **Topic:** `pass.com.nelsongx.apps.coupon-creator` (the pass type identifier)
+   - **APNs endpoint:** `https://api.push.apple.com/3/device/{pushToken}` (production)
+3. If APNs returns an error that the push token is invalid, delete that device from the database
+
+**Important:** Pass update push notifications only work in the **production** APNs environment, not sandbox. Use `api.push.apple.com`, not `api.sandbox.push.apple.com`.
+
+---
+
+## Database Schema
+
+### `passes` table
+
+| Column | Type | Description |
+|---|---|---|
+| `serial_number` | TEXT PRIMARY KEY | The couponID (UUID string) |
+| `authentication_token` | TEXT | Random token generated when pass is created |
+| `title` | TEXT | Coupon title |
+| `description` | TEXT | Coupon description |
+| `discount` | TEXT | Discount text |
+| `organization_name` | TEXT | Organization name |
+| `use_count` | INTEGER | Current usage count |
+| `max_use` | INTEGER | Maximum uses allowed |
+| `is_rechargeable` | BOOLEAN | Whether the coupon can be recharged |
+| `keep_after_used_up` | BOOLEAN | Keep pass in Wallet after fully used |
+| `expiration_date` | TEXT | ISO 8601 date or NULL |
+| `bg_red` | REAL | Background color red (0.0-1.0) |
+| `bg_green` | REAL | Background color green |
+| `bg_blue` | REAL | Background color blue |
+| `fg_red` | REAL | Foreground color red |
+| `fg_green` | REAL | Foreground color green |
+| `fg_blue` | REAL | Foreground color blue |
+| `last_updated` | INTEGER | Unix timestamp of last update |
+| `created_at` | TEXT | ISO 8601 creation date |
+
+### `devices` table
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PRIMARY KEY | Auto-increment ID |
+| `device_library_identifier` | TEXT UNIQUE | Identifier sent by the device |
+| `push_token` | TEXT | APNs push token for this device |
+
+### `registrations` table
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PRIMARY KEY | Auto-increment ID |
+| `device_id` | INTEGER | Foreign key to devices table |
+| `serial_number` | TEXT | Foreign key to passes table |
+| UNIQUE | | `(device_id, serial_number)` |
+
+---
 
 ## How to Build the `.pkpass` Bundle
 
@@ -54,7 +246,9 @@ A `.pkpass` file is a ZIP archive containing these files:
   "formatVersion": 1,
   "passTypeIdentifier": "pass.com.nelsongx.apps.coupon-creator",
   "teamIdentifier": "G4LXL97NF9",
-  "serialNumber": "<use the couponID from the request>",
+  "serialNumber": "<couponID>",
+  "authenticationToken": "<random 16+ character hex string, stored in DB>",
+  "webServiceURL": "https://<YOUR_SERVER_URL>/api",
   "organizationName": "<from request>",
   "description": "<title from request>",
   "logoText": "<organizationName from request>",
@@ -79,12 +273,14 @@ A `.pkpass` file is a ZIP archive containing these files:
       {
         "key": "usage",
         "label": "USES",
-        "value": "<useCount>/<maxUse>"
+        "value": "<useCount>/<maxUse>",
+        "changeMessage": "Usage updated to %@"
       },
       {
         "key": "status",
         "label": "STATUS",
-        "value": "<'Active' or 'Used Up' based on useCount vs maxUse>"
+        "value": "<'Active' or 'Used Up' based on useCount vs maxUse>",
+        "changeMessage": "Status changed to %@"
       }
     ],
     "auxiliaryFields": [
@@ -128,10 +324,14 @@ A `.pkpass` file is a ZIP archive containing these files:
 }
 ```
 
-**Important notes on `pass.json`:**
+**Critical fields for updates:**
+- `authenticationToken` — Generate a random hex string (at least 16 characters) when the pass is first created. Store it in the DB. **Never change it** during updates.
+- `webServiceURL` — Your server's public HTTPS URL followed by `/api`. This tells Wallet where to call for registration and updates.
+- `changeMessage` on fields — When the field value changes, Wallet shows this message on the lock screen. `%@` is replaced with the new value.
 
+**Other important notes on `pass.json`:**
 - `foregroundColor` and `backgroundColor` must be CSS-style strings: `"rgb(51, 127, 229)"`
-- Convert the 0.0–1.0 float values to 0–255 integers: `Math.round(value * 255)`
+- Convert the 0.0-1.0 float values to 0-255 integers: `Math.round(value * 255)`
 - `serialNumber` must be unique per pass — use the `couponID`
 - If `expirationDate` is null/missing, omit the key entirely
 - The `barcodes[0].message` should be the JSON-encoded request body so the iOS app can scan and decode it
@@ -184,7 +384,7 @@ openssl smime -sign -binary -in manifest.json \
   -passin pass:<password>
 ```
 
-If using the `.p12` directly, first extract the cert and key:
+If using the `.p12` directly, first extract the cert and key at server startup:
 
 ```bash
 # Extract certificate
@@ -200,20 +400,19 @@ ZIP all files (`pass.json`, `manifest.json`, `signature`, and all image files) i
 - `Content-Type: application/vnd.apple.pkpass`
 - `Content-Disposition: attachment; filename="coupon.pkpass"`
 
+---
+
 ## Project Structure
 
 ```
 wallet-pass-server/
 ├── main.py
+... (routes and lib)
 ├── certs/
 │   ├── pass.p12          (user provides)
 │   └── wwdr.pem          (Apple WWDR G4 cert)
 ├── .env.example
-│   PASS_CERTIFICATE_PATH=./certs/pass.p12
-│   PASS_CERTIFICATE_PASSWORD=
-│   WWDR_CERTIFICATE_PATH=./certs/wwdr.pem
-│   PORT=8324
-└── README.md
+...
 ```
 
 ## Health Check
@@ -224,19 +423,30 @@ Returns `{ "status": "ok" }` so the iOS app can verify connectivity.
 
 ## Deployment Notes
 
-- Should be deployable to Railway, Render, Fly.io, or any Docker host
-- Include a `Dockerfile` for easy deployment
-- Listen on `PORT` env var (default 8324)
+- Listen on `PORT` env var (default 8000)
 - Enable CORS for the iOS app
-- No authentication needed initially (can be added later)
+- **Must use HTTPS in production** (required by Apple for `webServiceURL`)
+- The `webServiceURL` in `pass.json` must be set to your deployed server's public URL + `/api`
+- Store the `WEB_SERVICE_URL` as an environment variable so it can be configured per deployment
 
 ## Testing
 
 Include a test script or curl command in the README:
 
 ```bash
-curl -X POST http://localhost:8324/sign-pass \
+# Create a pass
+curl -X POST http://localhost:8000/sign-pass \
   -H "Content-Type: application/json" \
   -d '{"title":"Test Coupon","discount":"10% OFF","organizationName":"Test Shop","useCount":0,"maxUse":3,"isRechargeable":false,"keepAfterUsedUp":true,"couponID":"550e8400-e29b-41d4-a716-446655440000","backgroundColor":{"red":0.2,"green":0.5,"blue":0.9},"foregroundColor":{"red":1,"green":1,"blue":1}}' \
   -o test.pkpass
+
+# Update a pass (redeem one use)
+curl -X POST http://localhost:8000/update-pass \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test Coupon","discount":"10% OFF","organizationName":"Test Shop","useCount":1,"maxUse":3,"isRechargeable":false,"keepAfterUsedUp":true,"couponID":"550e8400-e29b-41d4-a716-446655440000","backgroundColor":{"red":0.2,"green":0.5,"blue":0.9},"foregroundColor":{"red":1,"green":1,"blue":1}}' \
+  -o test-updated.pkpass
 ```
+
+You can test the output by dragging `test.pkpass` onto the iOS Simulator — Wallet should show the "Add Pass" dialog if it's valid.
+**Note:** Push notifications for pass updates only work in the production APNs environment. They will not work in the simulator or with sandbox APNs.
+

@@ -1,6 +1,12 @@
-def main():
-    print("Hello from wallet-coupon-creator-server!")
+from fastapi import FastAPI
 
+app = FastAPI(
+    title="Wallet Coupon Creator Server",
+    description="A server to create and manage Apple Wallet coupons, including device registration for push notifications",
+    version="1.0.0",
+    root_path="/api"
+)
 
-if __name__ == "__main__":
-    main()
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
