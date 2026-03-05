@@ -7,18 +7,20 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel
+from sqlmodel import Session, select
 
 load_dotenv()
 
-from database import get_db, init_db
+from database import Device, Pass, Registration, get_session, init_db
 from pass_builder import build_pkpass, load_certificates
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
 
 
 @asynccontextmanager
@@ -72,78 +74,91 @@ class PassRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _pass_data_from_request(req: PassRequest) -> dict:
+def _pass_data_from_db(row: Pass) -> dict:
     return {
-        "title": req.title,
-        "description": req.description,
-        "discount": req.discount,
-        "organization_name": req.organizationName,
-        "use_count": req.useCount,
-        "max_use": req.maxUse,
-        "is_rechargeable": req.isRechargeable,
-        "keep_after_used_up": req.keepAfterUsedUp,
-        "expiration_date": req.expirationDate,
-        "coupon_id": req.couponID,
-        "bg_red": req.backgroundColor.red,
-        "bg_green": req.backgroundColor.green,
-        "bg_blue": req.backgroundColor.blue,
-        "fg_red": req.foregroundColor.red,
-        "fg_green": req.foregroundColor.green,
-        "fg_blue": req.foregroundColor.blue,
-        "barcode_message": req.model_dump_json(),
+        "title": row.title,
+        "description": row.description,
+        "discount": row.discount,
+        "organization_name": row.organization_name,
+        "use_count": row.use_count,
+        "max_use": row.max_use,
+        "is_rechargeable": row.is_rechargeable,
+        "keep_after_used_up": row.keep_after_used_up,
+        "expiration_date": row.expiration_date,
+        "coupon_id": row.serial_number,
+        "bg_red": row.bg_red,
+        "bg_green": row.bg_green,
+        "bg_blue": row.bg_blue,
+        "fg_red": row.fg_red,
+        "fg_green": row.fg_green,
+        "fg_blue": row.fg_blue,
+        "barcode_message": json.dumps({
+            "title": row.title,
+            "description": row.description,
+            "discount": row.discount,
+            "organizationName": row.organization_name,
+            "useCount": row.use_count,
+            "maxUse": row.max_use,
+            "isRechargeable": row.is_rechargeable,
+            "keepAfterUsedUp": row.keep_after_used_up,
+            "expirationDate": row.expiration_date,
+            "couponID": row.serial_number,
+            "backgroundColor": {"red": row.bg_red, "green": row.bg_green, "blue": row.bg_blue},
+            "foregroundColor": {"red": row.fg_red, "green": row.fg_green, "blue": row.fg_blue},
+        }),
     }
 
 
-def _upsert_pass(req: PassRequest) -> str:
-    """Upsert pass into DB, returning the authentication_token."""
-    with get_db() as conn:
-        existing = conn.execute(
-            "SELECT authentication_token FROM passes WHERE serial_number = ?",
-            (req.couponID,),
-        ).fetchone()
+def _upsert_pass(req: PassRequest, session: Session) -> Pass:
+    """Upsert pass into DB, returning the Pass ORM object."""
+    existing = session.get(Pass, req.couponID)
 
-        if existing:
-            auth_token = existing["authentication_token"]
-            conn.execute(
-                """
-                UPDATE passes SET
-                    title = ?, description = ?, discount = ?, organization_name = ?,
-                    use_count = ?, max_use = ?, is_rechargeable = ?, keep_after_used_up = ?,
-                    expiration_date = ?, bg_red = ?, bg_green = ?, bg_blue = ?,
-                    fg_red = ?, fg_green = ?, fg_blue = ?, last_updated = ?
-                WHERE serial_number = ?
-                """,
-                (
-                    req.title, req.description, req.discount, req.organizationName,
-                    req.useCount, req.maxUse, int(req.isRechargeable), int(req.keepAfterUsedUp),
-                    req.expirationDate,
-                    req.backgroundColor.red, req.backgroundColor.green, req.backgroundColor.blue,
-                    req.foregroundColor.red, req.foregroundColor.green, req.foregroundColor.blue,
-                    int(time.time()),
-                    req.couponID,
-                ),
-            )
-        else:
-            auth_token = secrets.token_hex(16)
-            conn.execute(
-                """
-                INSERT INTO passes (
-                    serial_number, authentication_token, title, description, discount,
-                    organization_name, use_count, max_use, is_rechargeable, keep_after_used_up,
-                    expiration_date, bg_red, bg_green, bg_blue, fg_red, fg_green, fg_blue,
-                    last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    req.couponID, auth_token, req.title, req.description, req.discount,
-                    req.organizationName, req.useCount, req.maxUse, int(req.isRechargeable),
-                    int(req.keepAfterUsedUp), req.expirationDate,
-                    req.backgroundColor.red, req.backgroundColor.green, req.backgroundColor.blue,
-                    req.foregroundColor.red, req.foregroundColor.green, req.foregroundColor.blue,
-                    int(time.time()),
-                ),
-            )
-    return auth_token
+    if existing:
+        existing.title = req.title
+        existing.description = req.description
+        existing.discount = req.discount
+        existing.organization_name = req.organizationName
+        existing.use_count = req.useCount
+        existing.max_use = req.maxUse
+        existing.is_rechargeable = req.isRechargeable
+        existing.keep_after_used_up = req.keepAfterUsedUp
+        existing.expiration_date = req.expirationDate
+        existing.bg_red = req.backgroundColor.red
+        existing.bg_green = req.backgroundColor.green
+        existing.bg_blue = req.backgroundColor.blue
+        existing.fg_red = req.foregroundColor.red
+        existing.fg_green = req.foregroundColor.green
+        existing.fg_blue = req.foregroundColor.blue
+        existing.last_updated = int(time.time())
+        session.add(existing)
+        session.commit()
+        session.refresh(existing)
+        return existing
+
+    new_pass = Pass(
+        serial_number=req.couponID,
+        authentication_token=secrets.token_hex(16),
+        title=req.title,
+        description=req.description,
+        discount=req.discount,
+        organization_name=req.organizationName,
+        use_count=req.useCount,
+        max_use=req.maxUse,
+        is_rechargeable=req.isRechargeable,
+        keep_after_used_up=req.keepAfterUsedUp,
+        expiration_date=req.expirationDate,
+        bg_red=req.backgroundColor.red,
+        bg_green=req.backgroundColor.green,
+        bg_blue=req.backgroundColor.blue,
+        fg_red=req.foregroundColor.red,
+        fg_green=req.foregroundColor.green,
+        fg_blue=req.foregroundColor.blue,
+        last_updated=int(time.time()),
+    )
+    session.add(new_pass)
+    session.commit()
+    session.refresh(new_pass)
+    return new_pass
 
 
 def _pkpass_response(pkpass_bytes: bytes) -> FastAPIResponse:
@@ -154,17 +169,14 @@ def _pkpass_response(pkpass_bytes: bytes) -> FastAPIResponse:
     )
 
 
-def _validate_auth_token(serial_number: str, auth_header: Optional[str]) -> None:
+def _validate_auth_token(serial_number: str, auth_header: Optional[str], session: Session) -> Pass:
     if not auth_header or not auth_header.startswith("ApplePass "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     provided_token = auth_header[len("ApplePass "):]
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT authentication_token FROM passes WHERE serial_number = ?",
-            (serial_number,),
-        ).fetchone()
-    if not row or row["authentication_token"] != provided_token:
+    pass_ = session.get(Pass, serial_number)
+    if not pass_ or pass_.authentication_token != provided_token:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
+    return pass_
 
 
 # ---------------------------------------------------------------------------
@@ -177,52 +189,45 @@ async def health_check():
 
 
 @app.post("/sign-pass")
-async def sign_pass(req: PassRequest):
-    auth_token = _upsert_pass(req)
-    pass_data = _pass_data_from_request(req)
-    pkpass_bytes = build_pkpass(pass_data, auth_token)
+async def sign_pass(req: PassRequest, session: Session = Depends(get_session)):
+    pass_ = _upsert_pass(req, session)
+    pkpass_bytes = build_pkpass(_pass_data_from_db(pass_), pass_.authentication_token)
     return _pkpass_response(pkpass_bytes)
 
 
 @app.post("/update-pass")
-async def update_pass(req: PassRequest):
-    auth_token = _upsert_pass(req)
-    pass_data = _pass_data_from_request(req)
-    pkpass_bytes = build_pkpass(pass_data, auth_token)
+async def update_pass(req: PassRequest, session: Session = Depends(get_session)):
+    pass_ = _upsert_pass(req, session)
+    pkpass_bytes = build_pkpass(_pass_data_from_db(pass_), pass_.authentication_token)
 
-    # Send push notifications
-    with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT d.push_token, d.device_library_identifier, d.id as device_id
-            FROM devices d
-            JOIN registrations r ON r.device_id = d.id
-            WHERE r.serial_number = ?
-            """,
-            (req.couponID,),
-        ).fetchall()
+    # Collect push tokens for registered devices
+    registrations = session.exec(
+        select(Registration).where(Registration.serial_number == req.couponID)
+    ).all()
 
-    if rows:
-        push_tokens = [r["push_token"] for r in rows]
-        token_to_device = {r["push_token"]: r["device_id"] for r in rows}
+    if registrations:
+        devices = session.exec(
+            select(Device)
+            .join(Registration, Registration.device_id == Device.id)
+            .where(Registration.serial_number == req.couponID)
+        ).all()
+        push_tokens = [d.push_token for d in devices]
+        token_to_device = {d.push_token: d for d in devices}
 
         from apns import send_push_notifications
         invalid_tokens = await send_push_notifications(push_tokens)
 
+        for token in invalid_tokens:
+            device = token_to_device.get(token)
+            if device:
+                device_regs = session.exec(
+                    select(Registration).where(Registration.device_id == device.id)
+                ).all()
+                for reg in device_regs:
+                    session.delete(reg)
+                session.delete(device)
         if invalid_tokens:
-            with get_db() as conn:
-                for token in invalid_tokens:
-                    device_id = token_to_device.get(token)
-                    if device_id:
-                        # Remove registrations for this device first
-                        conn.execute("DELETE FROM registrations WHERE device_id = ?", (device_id,))
-                        # If no more registrations, remove the device
-                        remaining = conn.execute(
-                            "SELECT COUNT(*) as cnt FROM registrations WHERE device_id = ?",
-                            (device_id,),
-                        ).fetchone()
-                        if remaining["cnt"] == 0:
-                            conn.execute("DELETE FROM devices WHERE id = ?", (device_id,))
+            session.commit()
 
     return _pkpass_response(pkpass_bytes)
 
@@ -237,45 +242,44 @@ async def register_device(
     pass_type_identifier: str,
     serial_number: str,
     request: Request,
+    session: Session = Depends(get_session),
     authorization: Optional[str] = Header(None),
 ):
-    _validate_auth_token(serial_number, authorization)
+    _validate_auth_token(serial_number, authorization, session)
 
     body = await request.json()
     push_token = body.get("pushToken", "")
     if not push_token:
         raise HTTPException(status_code=400, detail="Missing pushToken")
 
-    with get_db() as conn:
-        # Upsert device
-        conn.execute(
-            """
-            INSERT INTO devices (device_library_identifier, push_token)
-            VALUES (?, ?)
-            ON CONFLICT(device_library_identifier) DO UPDATE SET push_token = excluded.push_token
-            """,
-            (device_library_identifier, push_token),
+    # Upsert device
+    device = session.exec(
+        select(Device).where(Device.device_library_identifier == device_library_identifier)
+    ).first()
+
+    if device:
+        device.push_token = push_token
+        session.add(device)
+    else:
+        device = Device(device_library_identifier=device_library_identifier, push_token=push_token)
+        session.add(device)
+
+    session.commit()
+    session.refresh(device)
+
+    # Check for existing registration
+    existing_reg = session.exec(
+        select(Registration).where(
+            Registration.device_id == device.id,
+            Registration.serial_number == serial_number,
         )
-        device_row = conn.execute(
-            "SELECT id FROM devices WHERE device_library_identifier = ?",
-            (device_library_identifier,),
-        ).fetchone()
-        device_id = device_row["id"]
+    ).first()
 
-        # Check if registration exists
-        existing_reg = conn.execute(
-            "SELECT id FROM registrations WHERE device_id = ? AND serial_number = ?",
-            (device_id, serial_number),
-        ).fetchone()
+    if existing_reg:
+        return Response(status_code=200)
 
-        if existing_reg:
-            return Response(status_code=200)
-
-        conn.execute(
-            "INSERT INTO registrations (device_id, serial_number) VALUES (?, ?)",
-            (device_id, serial_number),
-        )
-
+    session.add(Registration(device_id=device.id, serial_number=serial_number))
+    session.commit()
     return Response(status_code=201)
 
 
@@ -284,52 +288,38 @@ async def get_serial_numbers(
     device_library_identifier: str,
     pass_type_identifier: str,
     request: Request,
+    session: Session = Depends(get_session),
 ):
-    passes_updated_since = request.query_params.get("passesUpdatedSince")
+    device = session.exec(
+        select(Device).where(Device.device_library_identifier == device_library_identifier)
+    ).first()
 
-    with get_db() as conn:
-        device_row = conn.execute(
-            "SELECT id FROM devices WHERE device_library_identifier = ?",
-            (device_library_identifier,),
-        ).fetchone()
-
-        if not device_row:
-            return Response(status_code=204)
-
-        device_id = device_row["id"]
-
-        if passes_updated_since:
-            try:
-                since_ts = int(passes_updated_since)
-            except ValueError:
-                since_ts = 0
-            rows = conn.execute(
-                """
-                SELECT p.serial_number, p.last_updated
-                FROM passes p
-                JOIN registrations r ON r.serial_number = p.serial_number
-                WHERE r.device_id = ? AND p.last_updated > ?
-                """,
-                (device_id, since_ts),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT p.serial_number, p.last_updated
-                FROM passes p
-                JOIN registrations r ON r.serial_number = p.serial_number
-                WHERE r.device_id = ?
-                """,
-                (device_id,),
-            ).fetchall()
-
-    if not rows:
+    if not device:
         return Response(status_code=204)
 
-    serial_numbers = [r["serial_number"] for r in rows]
-    last_updated = str(max(r["last_updated"] for r in rows))
+    passes_updated_since = request.query_params.get("passesUpdatedSince")
 
-    return {"serialNumbers": serial_numbers, "lastUpdated": last_updated}
+    query = (
+        select(Pass)
+        .join(Registration, Registration.serial_number == Pass.serial_number)
+        .where(Registration.device_id == device.id)
+    )
+    if passes_updated_since:
+        try:
+            since_ts = int(passes_updated_since)
+            query = query.where(Pass.last_updated > since_ts)
+        except ValueError:
+            pass
+
+    passes = session.exec(query).all()
+
+    if not passes:
+        return Response(status_code=204)
+
+    return {
+        "serialNumbers": [p.serial_number for p in passes],
+        "lastUpdated": str(max(p.last_updated for p in passes)),
+    }
 
 
 @app.get("/api/v1/passes/{pass_type_identifier}/{serial_number}")
@@ -337,63 +327,20 @@ async def get_latest_pass(
     pass_type_identifier: str,
     serial_number: str,
     request: Request,
+    session: Session = Depends(get_session),
     authorization: Optional[str] = Header(None),
 ):
-    _validate_auth_token(serial_number, authorization)
+    pass_ = _validate_auth_token(serial_number, authorization, session)
 
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM passes WHERE serial_number = ?",
-            (serial_number,),
-        ).fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Pass not found")
-
-    # Check If-Modified-Since
     if_modified_since = request.headers.get("If-Modified-Since")
     if if_modified_since:
         try:
-            client_ts = int(if_modified_since)
-            if row["last_updated"] <= client_ts:
+            if pass_.last_updated <= int(if_modified_since):
                 return Response(status_code=304)
         except ValueError:
             pass
 
-    pass_data = {
-        "title": row["title"],
-        "description": row["description"],
-        "discount": row["discount"],
-        "organization_name": row["organization_name"],
-        "use_count": row["use_count"],
-        "max_use": row["max_use"],
-        "is_rechargeable": bool(row["is_rechargeable"]),
-        "keep_after_used_up": bool(row["keep_after_used_up"]),
-        "expiration_date": row["expiration_date"],
-        "coupon_id": row["serial_number"],
-        "bg_red": row["bg_red"],
-        "bg_green": row["bg_green"],
-        "bg_blue": row["bg_blue"],
-        "fg_red": row["fg_red"],
-        "fg_green": row["fg_green"],
-        "fg_blue": row["fg_blue"],
-        "barcode_message": json.dumps({
-            "title": row["title"],
-            "description": row["description"],
-            "discount": row["discount"],
-            "organizationName": row["organization_name"],
-            "useCount": row["use_count"],
-            "maxUse": row["max_use"],
-            "isRechargeable": bool(row["is_rechargeable"]),
-            "keepAfterUsedUp": bool(row["keep_after_used_up"]),
-            "expirationDate": row["expiration_date"],
-            "couponID": row["serial_number"],
-            "backgroundColor": {"red": row["bg_red"], "green": row["bg_green"], "blue": row["bg_blue"]},
-            "foregroundColor": {"red": row["fg_red"], "green": row["fg_green"], "blue": row["fg_blue"]},
-        }),
-    }
-
-    pkpass_bytes = build_pkpass(pass_data, row["authentication_token"])
+    pkpass_bytes = build_pkpass(_pass_data_from_db(pass_), pass_.authentication_token)
     return _pkpass_response(pkpass_bytes)
 
 
@@ -402,31 +349,36 @@ async def unregister_device(
     device_library_identifier: str,
     pass_type_identifier: str,
     serial_number: str,
+    session: Session = Depends(get_session),
     authorization: Optional[str] = Header(None),
 ):
-    _validate_auth_token(serial_number, authorization)
+    _validate_auth_token(serial_number, authorization, session)
 
-    with get_db() as conn:
-        device_row = conn.execute(
-            "SELECT id FROM devices WHERE device_library_identifier = ?",
-            (device_library_identifier,),
-        ).fetchone()
+    device = session.exec(
+        select(Device).where(Device.device_library_identifier == device_library_identifier)
+    ).first()
 
-        if not device_row:
-            return Response(status_code=200)
+    if not device:
+        return Response(status_code=200)
 
-        device_id = device_row["id"]
-        conn.execute(
-            "DELETE FROM registrations WHERE device_id = ? AND serial_number = ?",
-            (device_id, serial_number),
+    reg = session.exec(
+        select(Registration).where(
+            Registration.device_id == device.id,
+            Registration.serial_number == serial_number,
         )
+    ).first()
 
-        remaining = conn.execute(
-            "SELECT COUNT(*) as cnt FROM registrations WHERE device_id = ?",
-            (device_id,),
-        ).fetchone()
-        if remaining["cnt"] == 0:
-            conn.execute("DELETE FROM devices WHERE id = ?", (device_id,))
+    if reg:
+        session.delete(reg)
+        session.commit()
+
+    remaining = session.exec(
+        select(Registration).where(Registration.device_id == device.id)
+    ).all()
+
+    if not remaining:
+        session.delete(device)
+        session.commit()
 
     return Response(status_code=200)
 
@@ -434,8 +386,7 @@ async def unregister_device(
 @app.post("/api/v1/log")
 async def log_errors(request: Request):
     body = await request.json()
-    logs = body.get("logs", [])
-    for msg in logs:
+    for msg in body.get("logs", []):
         logger.warning("[Apple Wallet] %s", msg)
     return Response(status_code=200)
 

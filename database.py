@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from typing import Optional, Generator
 
 from sqlmodel import Field, Relationship, Session, SQLModel, UniqueConstraint, create_engine
@@ -42,7 +43,7 @@ class Pass(SQLModel, table=True):
     fg_green: float = 1.0
     fg_blue: float = 1.0
     last_updated: int = 0
-    created_at: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     registrations: list["Registration"] = Relationship(back_populates="pass_")
 
