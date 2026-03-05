@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional, Generator
 
+from sqlalchemy import Column, LargeBinary
 from sqlmodel import Field, Relationship, Session, SQLModel, UniqueConstraint, create_engine
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./wallet.db")
@@ -45,6 +46,8 @@ class Pass(SQLModel, table=True):
     lb_red: float = 1.0
     lb_green: float = 1.0
     lb_blue: float = 1.0
+    language: str = "en"
+    icon_image: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary, nullable=True))
     last_updated: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -23,3 +23,4 @@ class PassRequest(BaseModel):
     backgroundColor: ColorComponent
     foregroundColor: ColorComponent
     labelColor: Optional[ColorComponent] = None
+    language: Literal["en", "zh-TW"] = "en"

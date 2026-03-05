@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlmodel import Session, select
 
-from database import Device, Registration, get_session
+from database import Device, Pass, Registration, get_session
 from pass_builder import build_pkpass
 from schemas import PassRequest
 from services.pass_service import pass_data_from_db, pkpass_response, upsert_pass
@@ -59,3 +59,20 @@ async def update_pass(req: PassRequest, session: Session = Depends(get_session))
             session.commit()
 
     return pkpass_response(pkpass_bytes)
+
+
+@router.post("/pass-icon/{coupon_id}")
+async def upload_icon(
+    coupon_id: str,
+    icon: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    pass_ = session.get(Pass, coupon_id)
+    if not pass_:
+        raise HTTPException(status_code=404, detail="Pass not found")
+    if not icon.content_type or not icon.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    pass_.icon_image = await icon.read()
+    session.add(pass_)
+    session.commit()
+    return {"status": "ok"}

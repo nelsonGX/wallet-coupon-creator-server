@@ -31,6 +31,8 @@ def pass_data_from_db(row: Pass) -> dict:
         "lb_red": row.lb_red,
         "lb_green": row.lb_green,
         "lb_blue": row.lb_blue,
+        "language": row.language,
+        "icon_image": row.icon_image,
     }
 
 
@@ -56,6 +58,7 @@ def upsert_pass(req: PassRequest, session: Session) -> Pass:
         existing.lb_red = req.labelColor.red if req.labelColor else req.foregroundColor.red
         existing.lb_green = req.labelColor.green if req.labelColor else req.foregroundColor.green
         existing.lb_blue = req.labelColor.blue if req.labelColor else req.foregroundColor.blue
+        existing.language = req.language
         existing.last_updated = int(time.time())
         session.add(existing)
         session.commit()
@@ -80,9 +83,10 @@ def upsert_pass(req: PassRequest, session: Session) -> Pass:
         fg_red=req.foregroundColor.red,
         fg_green=req.foregroundColor.green,
         fg_blue=req.foregroundColor.blue,
-        label_red=req.labelColor.red if req.labelColor else req.foregroundColor.red,
-        label_green=req.labelColor.green if req.labelColor else req.foregroundColor.green,
-        label_blue=req.labelColor.blue if req.labelColor else req.foregroundColor.blue,
+        lb_red=req.labelColor.red if req.labelColor else req.foregroundColor.red,
+        lb_green=req.labelColor.green if req.labelColor else req.foregroundColor.green,
+        lb_blue=req.labelColor.blue if req.labelColor else req.foregroundColor.blue,
+        language=req.language,
         last_updated=int(time.time()),
     )
     session.add(new_pass)
