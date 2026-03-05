@@ -33,7 +33,6 @@ async def sign_pass(
 ):
     req = _parse_pass_request(data)
     print("Signing pass:", req.couponID)
-    print("icon:", icon.filename if icon else "None", "content_type:", icon.content_type if icon else "N/A")
     pass_ = upsert_pass(req, session)
     if icon is not None:
         if not icon.content_type or not icon.content_type.startswith("image/"):

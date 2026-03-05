@@ -230,10 +230,16 @@ def build_pkpass(pass_data: dict, authentication_token: str) -> bytes:
     passfile.barcode = Barcode(message=coupon_id, format=BarcodeFormat.QR)
 
     # Add images — use provided icon if available, else solid-color placeholder
-    for name, size in [
-        ("logo.png", 50), ("logo@2x.png", 100), ("logo@3x.png", 150),
-    ]:
-        passfile.addFile(name, io.BytesIO(_solid_png(size, size, bg_r, bg_g, bg_b)))
+    if icon_image:
+        for name, size in [
+            ("logo.png", 50), ("logo@2x.png", 100), ("logo@3x.png", 150),
+        ]:
+            passfile.addFile(name, io.BytesIO(_resize_png(icon_image, size, size)))
+    else:
+        for name, size in [
+            ("logo.png", 50), ("logo@2x.png", 100), ("logo@3x.png", 150),
+        ]:
+            passfile.addFile(name, io.BytesIO(_solid_png(size, size, bg_r, bg_g, bg_b)))
 
     if icon_image:
         for name, size in [
