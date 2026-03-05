@@ -42,6 +42,9 @@ class Pass(SQLModel, table=True):
     fg_red: float = 1.0
     fg_green: float = 1.0
     fg_blue: float = 1.0
+    lb_red: float = 1.0
+    lb_green: float = 1.0
+    lb_blue: float = 1.0
     last_updated: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

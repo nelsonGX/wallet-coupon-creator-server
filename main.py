@@ -27,6 +27,7 @@ app = FastAPI(
     description="Apple Wallet .pkpass signing and auto-update server",
     version="1.0.0",
     lifespan=lifespan,
+    root_path="/api"
 )
 
 app.add_middleware(

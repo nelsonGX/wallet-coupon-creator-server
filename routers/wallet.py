@@ -8,7 +8,7 @@ from database import Device, Pass, Registration, get_session
 from pass_builder import build_pkpass
 from services.pass_service import pass_data_from_db, pkpass_response, validate_auth_token
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/v1")
 logger = logging.getLogger(__name__)
 
 

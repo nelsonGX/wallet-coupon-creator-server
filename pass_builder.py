@@ -68,6 +68,9 @@ def build_pkpass(pass_data: dict, authentication_token: str) -> bytes:
     fg_r = pass_data.get("fg_red", 1.0)
     fg_g = pass_data.get("fg_green", 1.0)
     fg_b = pass_data.get("fg_blue", 1.0)
+    lg_r = pass_data.get("label_red", fg_r)
+    lg_g = pass_data.get("label_green", fg_g)
+    lg_b = pass_data.get("label_blue", fg_b)
 
     use_count = pass_data.get("use_count", 0)
     max_use = pass_data.get("max_use", 1)
@@ -79,7 +82,6 @@ def build_pkpass(pass_data: dict, authentication_token: str) -> bytes:
     organization_name = pass_data.get("organization_name", "Coupon Creator")
     coupon_id = pass_data.get("coupon_id", "")
     expiration_date = pass_data.get("expiration_date")
-    barcode_message = pass_data.get("barcode_message", "{}")
 
     status = "Active" if use_count < max_use else "Used Up"
 
@@ -114,15 +116,14 @@ def build_pkpass(pass_data: dict, authentication_token: str) -> bytes:
     passfile.logoText = organization_name
     passfile.backgroundColor = _rgb_string(bg_r, bg_g, bg_b)
     passfile.foregroundColor = _rgb_string(fg_r, fg_g, fg_b)
+    passfile.labelColor = _rgb_string(lg_r, lg_g, lg_b)
     passfile.authenticationToken = authentication_token
     passfile.webServiceURL = WEB_SERVICE_URL.rstrip("/") + "/"
 
     if expiration_date:
         passfile.expirationDate = expiration_date
 
-    passfile.barcodes = [
-        Barcode(message=barcode_message, format=BarcodeFormat.QR).json_dict()
-    ]
+    passfile.barcode = Barcode(message=coupon_id, format=BarcodeFormat.QR)
 
     # Add placeholder images
     for name, size in [

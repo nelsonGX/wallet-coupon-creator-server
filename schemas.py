@@ -22,3 +22,4 @@ class PassRequest(BaseModel):
     couponID: str
     backgroundColor: ColorComponent
     foregroundColor: ColorComponent
+    labelColor: Optional[ColorComponent] = None

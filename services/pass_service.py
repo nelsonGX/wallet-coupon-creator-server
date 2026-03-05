@@ -1,4 +1,3 @@
-import json
 import secrets
 import time
 from typing import Optional
@@ -29,20 +28,9 @@ def pass_data_from_db(row: Pass) -> dict:
         "fg_red": row.fg_red,
         "fg_green": row.fg_green,
         "fg_blue": row.fg_blue,
-        "barcode_message": json.dumps({
-            "title": row.title,
-            "description": row.description,
-            "discount": row.discount,
-            "organizationName": row.organization_name,
-            "useCount": row.use_count,
-            "maxUse": row.max_use,
-            "isRechargeable": row.is_rechargeable,
-            "keepAfterUsedUp": row.keep_after_used_up,
-            "expirationDate": row.expiration_date,
-            "couponID": row.serial_number,
-            "backgroundColor": {"red": row.bg_red, "green": row.bg_green, "blue": row.bg_blue},
-            "foregroundColor": {"red": row.fg_red, "green": row.fg_green, "blue": row.fg_blue},
-        }),
+        "lb_red": row.lb_red,
+        "lb_green": row.lb_green,
+        "lb_blue": row.lb_blue,
     }
 
 
@@ -65,6 +53,9 @@ def upsert_pass(req: PassRequest, session: Session) -> Pass:
         existing.fg_red = req.foregroundColor.red
         existing.fg_green = req.foregroundColor.green
         existing.fg_blue = req.foregroundColor.blue
+        existing.lb_red = req.labelColor.red if req.labelColor else req.foregroundColor.red
+        existing.lb_green = req.labelColor.green if req.labelColor else req.foregroundColor.green
+        existing.lb_blue = req.labelColor.blue if req.labelColor else req.foregroundColor.blue
         existing.last_updated = int(time.time())
         session.add(existing)
         session.commit()
@@ -89,6 +80,9 @@ def upsert_pass(req: PassRequest, session: Session) -> Pass:
         fg_red=req.foregroundColor.red,
         fg_green=req.foregroundColor.green,
         fg_blue=req.foregroundColor.blue,
+        label_red=req.labelColor.red if req.labelColor else req.foregroundColor.red,
+        label_green=req.labelColor.green if req.labelColor else req.foregroundColor.green,
+        label_blue=req.labelColor.blue if req.labelColor else req.foregroundColor.blue,
         last_updated=int(time.time()),
     )
     session.add(new_pass)

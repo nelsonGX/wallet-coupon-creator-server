@@ -5,6 +5,7 @@ from database import Device, Registration, get_session
 from pass_builder import build_pkpass
 from schemas import PassRequest
 from services.pass_service import pass_data_from_db, pkpass_response, upsert_pass
+from apns import send_push_notifications
 
 router = APIRouter()
 
@@ -16,6 +17,7 @@ async def health_check():
 
 @router.post("/sign-pass")
 async def sign_pass(req: PassRequest, session: Session = Depends(get_session)):
+    print("Signing pass:", req.couponID)
     pass_ = upsert_pass(req, session)
     pkpass_bytes = build_pkpass(pass_data_from_db(pass_), pass_.authentication_token)
     return pkpass_response(pkpass_bytes)
@@ -23,6 +25,7 @@ async def sign_pass(req: PassRequest, session: Session = Depends(get_session)):
 
 @router.post("/update-pass")
 async def update_pass(req: PassRequest, session: Session = Depends(get_session)):
+    print("Updating pass:", req.couponID)
     pass_ = upsert_pass(req, session)
     pkpass_bytes = build_pkpass(pass_data_from_db(pass_), pass_.authentication_token)
 
@@ -39,7 +42,8 @@ async def update_pass(req: PassRequest, session: Session = Depends(get_session))
         push_tokens = [d.push_token for d in devices]
         token_to_device = {d.push_token: d for d in devices}
 
-        from apns import send_push_notifications
+        print("Sending push notifications to:", push_tokens, "tokens for devices:", token_to_device)
+
         invalid_tokens = await send_push_notifications(push_tokens)
 
         for token in invalid_tokens:
