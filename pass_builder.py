@@ -3,12 +3,19 @@ Build and sign Apple Wallet .pkpass bundles using py-pkpass.
 """
 
 import io
-import json
 import os
 import tempfile
 
 from PIL import Image
 from py_pkpass.models import Barcode, BarcodeFormat, Coupon, Field, Pass
+
+# Patch Field.json_dict to exclude empty changeMessage — iOS suppresses notifications for fields with changeMessage: ""
+def _field_json_dict(self):
+    d = dict(self.__dict__)
+    if not d.get("changeMessage"):
+        d.pop("changeMessage", None)
+    return d
+Field.json_dict = _field_json_dict
 
 PASS_TYPE_IDENTIFIER = "pass.com.nelsongx.apps.coupon-creator"
 TEAM_IDENTIFIER = "G4LXL97NF9"
@@ -83,17 +90,15 @@ def build_pkpass(pass_data: dict, authentication_token: str) -> bytes:
     coupon_id = pass_data.get("coupon_id", "")
     expiration_date = pass_data.get("expiration_date")
 
-    status = "Active" if use_count < max_use else "Used Up"
-
     # Build coupon pass info
     coupon = Coupon()
     coupon.addHeaderField("discount", discount, "DISCOUNT")
     coupon.addPrimaryField("title", title, "COUPON")
 
+    uses_left = max_use - use_count
     usage_field = Field("usage", f"{use_count}/{max_use}", "USES")
-    usage_field.changeMessage = "Usage updated to %@"
-    status_field = Field("status", status, "STATUS")
-    status_field.changeMessage = "Status changed to %@"
+    status_field = Field("status", str(uses_left), "STATUS")
+    status_field.changeMessage = f"{title} coupon has been used. %@ uses left."
     coupon.secondaryFields.append(usage_field)
     coupon.secondaryFields.append(status_field)
 
