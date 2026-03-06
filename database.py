@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, Generator
 
-from sqlalchemy import Column, LargeBinary
+from sqlalchemy import Column, LargeBinary, text
 from sqlmodel import Field, Relationship, Session, SQLModel, UniqueConstraint, create_engine
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./wallet.db")
@@ -51,6 +51,9 @@ class Pass(SQLModel, table=True):
     icon_image: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary, nullable=True))
     last_updated: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    relevant_date: Optional[str] = None      # ISO 8601 datetime string
+    locations_json: Optional[str] = None     # JSON array of location objects
+    ibeacons_json: Optional[str] = None      # JSON array of iBeacon objects
 
     registrations: list["Registration"] = Relationship(back_populates="pass_")
 
@@ -92,7 +95,7 @@ class ShareToken(SQLModel, table=True):
 
 def init_db() -> None:
     if DATABASE_URL.startswith("sqlite"):
-        from sqlalchemy import event, text
+        from sqlalchemy import event
         from sqlalchemy.engine import Engine
         import sqlite3
 
@@ -105,6 +108,22 @@ def init_db() -> None:
                 cursor.close()
 
     SQLModel.metadata.create_all(engine)
+    _migrate_db()
+
+
+def _migrate_db() -> None:
+    """Add columns introduced after the initial schema without dropping existing data."""
+    new_columns = [
+        ("relevant_date", "TEXT"),
+        ("locations_json", "TEXT"),
+        ("ibeacons_json", "TEXT"),
+    ]
+    with engine.connect() as conn:
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(passes)"))}
+        for col_name, col_type in new_columns:
+            if col_name not in existing:
+                conn.execute(text(f"ALTER TABLE passes ADD COLUMN {col_name} {col_type}"))
+        conn.commit()
 
 
 def get_session() -> Generator[Session, None, None]:

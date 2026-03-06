@@ -227,6 +227,18 @@ def build_pkpass(pass_data: dict, authentication_token: str) -> bytes:
     if expired:
         passfile.voided = True  # type: ignore[assignment]
 
+    relevant_date = pass_data.get("relevant_date")
+    if relevant_date:
+        passfile.relevantDate = relevant_date
+
+    locations = pass_data.get("locations")
+    if locations:
+        passfile.locations = locations
+
+    ibeacons = pass_data.get("ibeacons")
+    if ibeacons:
+        passfile.ibeacons = ibeacons
+
     passfile.barcode = Barcode(message=coupon_id, format=BarcodeFormat.QR)
 
     # Add images — use provided icon if available, else solid-color placeholder

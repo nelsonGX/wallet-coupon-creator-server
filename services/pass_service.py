@@ -1,3 +1,4 @@
+import json
 import secrets
 import time
 from typing import Optional
@@ -33,11 +34,17 @@ def pass_data_from_db(row: Pass) -> dict:
         "lb_blue": row.lb_blue,
         "language": row.language,
         "icon_image": row.icon_image,
+        "relevant_date": row.relevant_date,
+        "locations": json.loads(row.locations_json) if row.locations_json else None,
+        "ibeacons": json.loads(row.ibeacons_json) if row.ibeacons_json else None,
     }
 
 
 def upsert_pass(req: PassRequest, session: Session) -> Pass:
     existing = session.get(Pass, req.couponID)
+
+    locations_json = json.dumps([loc.model_dump(exclude_none=True) for loc in req.locations]) if req.locations else None
+    ibeacons_json = json.dumps([b.model_dump(exclude_none=True) for b in req.ibeacons]) if req.ibeacons else None
 
     if existing:
         existing.title = req.title
@@ -59,6 +66,9 @@ def upsert_pass(req: PassRequest, session: Session) -> Pass:
         existing.lb_green = req.labelColor.green if req.labelColor else req.foregroundColor.green
         existing.lb_blue = req.labelColor.blue if req.labelColor else req.foregroundColor.blue
         existing.language = req.language
+        existing.relevant_date = req.relevantDate
+        existing.locations_json = locations_json
+        existing.ibeacons_json = ibeacons_json
         existing.last_updated = int(time.time())
         session.add(existing)
         session.commit()
@@ -87,6 +97,9 @@ def upsert_pass(req: PassRequest, session: Session) -> Pass:
         lb_green=req.labelColor.green if req.labelColor else req.foregroundColor.green,
         lb_blue=req.labelColor.blue if req.labelColor else req.foregroundColor.blue,
         language=req.language,
+        relevant_date=req.relevantDate,
+        locations_json=locations_json,
+        ibeacons_json=ibeacons_json,
         last_updated=int(time.time()),
     )
     session.add(new_pass)
