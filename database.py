@@ -108,23 +108,6 @@ def init_db() -> None:
                 cursor.close()
 
     SQLModel.metadata.create_all(engine)
-    _migrate_db()
-
-
-def _migrate_db() -> None:
-    """Add columns introduced after the initial schema without dropping existing data."""
-    new_columns = [
-        ("relevant_date", "TEXT"),
-        ("locations_json", "TEXT"),
-        ("ibeacons_json", "TEXT"),
-    ]
-    with engine.connect() as conn:
-        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(passes)"))}
-        for col_name, col_type in new_columns:
-            if col_name not in existing:
-                conn.execute(text(f"ALTER TABLE passes ADD COLUMN {col_name} {col_type}"))
-        conn.commit()
-
 
 def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:
