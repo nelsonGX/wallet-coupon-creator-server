@@ -1,13 +1,13 @@
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from sqlmodel import Session, select
 
 from database import Device, Pass, Registration, ShareToken, get_session
 from pass_builder import build_pkpass
 from schemas import PassRequest
-from services.pass_service import pass_data_from_db, pkpass_response, upsert_pass
+from services.pass_service import pass_data_from_db, pkpass_response, upsert_pass, validate_auth_token
 from apns import send_push_notifications
 
 router = APIRouter()
@@ -42,16 +42,22 @@ async def sign_pass(
         session.commit()
         session.refresh(pass_)
     pkpass_bytes = build_pkpass(pass_data_from_db(pass_), pass_.authentication_token)
-    return pkpass_response(pkpass_bytes)
+    response = pkpass_response(pkpass_bytes)
+    response.headers["X-Pass-Auth-Token"] = pass_.authentication_token
+    return response
 
 
 @router.post("/update-pass")
 async def update_pass(
     data: str = Form(...),
     icon: Optional[UploadFile] = File(default=None),
+    authorization: Optional[str] = Header(default=None),
     session: Session = Depends(get_session),
 ):
     req = _parse_pass_request(data)
+    existing = session.get(Pass, req.couponID)
+    if existing:
+        validate_auth_token(req.couponID, authorization, session)
     print("Updating pass:", req.couponID)
     pass_ = upsert_pass(req, session)
     if icon is not None:
